@@ -1,0 +1,15 @@
+# PlatformIO
+.pio/
+.vscode/
+build/
+.DS_Store
+*.pyc
+
+# IDE
+*.swp
+*.swo
+*~
+.sublime-*
+
+# OS
+Thumbs.db
