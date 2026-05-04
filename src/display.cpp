@@ -30,7 +30,7 @@ void display_init() {
     pinMode(LCD_BL, OUTPUT);
     digitalWrite(LCD_BL, HIGH);  // backlight on
 
-    gfx->fillScreen(BLACK);
+    gfx->fillScreen(COLOR_BG);
 }
 
 void display_backlight(bool on) {

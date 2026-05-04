@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
+#include <JPEGDEC.h>
 
 #include "config.h"
 #include "display.h"
@@ -30,6 +31,37 @@
 #define INFO_H      24
 #define CTRL_Y      200
 #define CTRL_H      120
+
+// ============================================================
+//  JPEG decoder  (JPEGDEC library by bitbank2)
+// ============================================================
+static JPEGDEC _jpeg;
+
+static int _jpeg_draw_cb(JPEGDRAW *pDraw) {
+    gfx->draw16bitRGBBitmap(pDraw->x, pDraw->y, pDraw->pPixels,
+                             pDraw->iWidth, pDraw->iHeight);
+    return 1;
+}
+
+// Draw a JPEG from SD card at (x,y).
+// scale: 0=full, JPEG_SCALE_HALF=2, JPEG_SCALE_QUARTER=4, JPEG_SCALE_EIGHTH=8
+static void draw_jpeg_from_sd(const char *path, int x, int y, int scale = 0) {
+    File f = SD.open(path);
+    if (!f) return;
+    size_t sz = f.size();
+    uint8_t *buf = (uint8_t *)ps_malloc(sz);
+    if (buf) {
+        f.read(buf, sz);
+        f.close();
+        if (_jpeg.openRAM(buf, sz, _jpeg_draw_cb)) {
+            _jpeg.decode(x, y, scale);
+            _jpeg.close();
+        }
+        free(buf);
+    } else {
+        f.close();
+    }
+}
 
 // ============================================================
 //  App State
@@ -161,7 +193,10 @@ static void handle_viewfinder_touch(int16_t tx, int16_t ty) {
 static void update_viewfinder() {
     camera_fb_t *fb = cam_get_preview();
     if (fb) {
-        gfx->drawJpg(fb->buf, fb->len, 0, PREVIEW_Y, PREVIEW_W, PREVIEW_H);
+        if (_jpeg.openRAM(fb->buf, fb->len, _jpeg_draw_cb)) {
+            _jpeg.decode(0, PREVIEW_Y, 0);
+            _jpeg.close();
+        }
         cam_return_fb(fb);
     }
 
@@ -256,9 +291,7 @@ static void draw_gallery() {
             snprintf(path, sizeof(path), "%s/%s",
                      PHOTO_DIR, gallery_files[idx].c_str());
             if (SD.exists(path)) {
-                // Decode JPEG scaled to thumb size (TJpgDec uses nearest /2 division)
-                gfx->drawJpgFile(SD, path, x, y, THUMB_W, THUMB_H,
-                                 0, 0, JPEG_DIV_8);
+                draw_jpeg_from_sd(path, x, y, JPEG_SCALE_EIGHTH);
                 // Thin border
                 gfx->drawRect(x, y, THUMB_W, THUMB_H, COLOR_GRAY);
             } else {
@@ -348,8 +381,7 @@ static void draw_photo_view() {
     char path[64];
     snprintf(path, sizeof(path), "%s/%s", PHOTO_DIR, photo_view_name.c_str());
     if (SD.exists(path)) {
-        gfx->drawJpgFile(SD, path, 0, PV_PHOTO_Y, 240, PV_PHOTO_H,
-                         0, 0, JPEG_DIV_NONE);
+        draw_jpeg_from_sd(path, 0, PV_PHOTO_Y, 0);
     }
 
     // Header overlay (semi-transparent via solid dark strip)
