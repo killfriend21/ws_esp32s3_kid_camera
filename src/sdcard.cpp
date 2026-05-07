@@ -11,11 +11,37 @@ static SPIClass _sd_spi(HSPI);
 static int photo_counter = 0;  // highest IMG number seen so far
 
 bool sdcard_init() {
-    _sd_spi.begin(LCD_SCK, LCD_MISO, LCD_MOSI, SD_CS);
-    if (!SD.begin(SD_CS, _sd_spi, 40000000UL)) {
-        Serial.println("[sd] SD card mount failed");
-        return false;
+    // Pull CS high first so SD card is deselected during SPI init
+    pinMode(SD_CS, OUTPUT);
+    digitalWrite(SD_CS, HIGH);
+
+    // Enable pull-up on MISO – some boards lack an external resistor;
+    // a floating MISO causes CMD0/CMD8 responses to read as garbage.
+    pinMode(LCD_MISO, INPUT_PULLUP);
+
+    // Start SPI3 (HSPI) with our custom GPIO mapping.
+    // Must use HSPI because GFX 1.4.0 already owns SPI3 on ESP32-S3.
+    _sd_spi.begin(LCD_SCK, LCD_MISO, LCD_MOSI);
+    delay(100);  // give card time to power up
+
+    Serial.printf("[sd] init  HSPI=%d  SCK=%d MISO=%d MOSI=%d CS=%d\n",
+                  HSPI, LCD_SCK, LCD_MISO, LCD_MOSI, SD_CS);
+
+    // Try descending speeds: 4 MHz → 1 MHz (some cheap cards need slow init)
+    static const uint32_t speeds[] = { 4000000UL, 1000000UL, 400000UL };
+    for (uint32_t spd : speeds) {
+        if (SD.begin(SD_CS, _sd_spi, spd)) {
+            Serial.printf("[sd] mounted at %lu Hz\n", spd);
+            goto sd_ok;
+        }
+        Serial.printf("[sd] mount failed at %lu Hz, retrying slower...\n", spd);
+        SD.end();
+        delay(200);
     }
+    Serial.println("[sd] SD card mount failed – check card/format/contacts");
+    return false;
+
+sd_ok:
 
     // Create photos directory if it doesn't exist yet
     if (!SD.exists(PHOTO_DIR)) {
