@@ -37,15 +37,34 @@
 // ============================================================
 static JPEGDEC _jpeg;
 
+// Optional clip rect for the decode callback (clip_w == 0 → no clip)
+static int16_t _clip_x, _clip_y, _clip_w, _clip_h;
+
 static int _jpeg_draw_cb(JPEGDRAW *pDraw) {
-    gfx->draw16bitRGBBitmap(pDraw->x, pDraw->y, pDraw->pPixels,
-                             pDraw->iWidth, pDraw->iHeight);
+    if (_clip_w > 0) {
+        int x1 = max((int)pDraw->x, (int)_clip_x);
+        int y1 = max((int)pDraw->y, (int)_clip_y);
+        int x2 = min((int)(pDraw->x + pDraw->iWidth),  (int)(_clip_x + _clip_w));
+        int y2 = min((int)(pDraw->y + pDraw->iHeight), (int)(_clip_y + _clip_h));
+        if (x1 >= x2 || y1 >= y2) return 1;
+        int sw = pDraw->iWidth;
+        for (int row = y1; row < y2; row++)
+            gfx->draw16bitRGBBitmap(x1, row,
+                pDraw->pPixels + (row - pDraw->y) * sw + (x1 - pDraw->x),
+                x2 - x1, 1);
+    } else {
+        gfx->draw16bitRGBBitmap(pDraw->x, pDraw->y, pDraw->pPixels,
+                                 pDraw->iWidth, pDraw->iHeight);
+    }
     return 1;
 }
 
 // Draw a JPEG from SD card at (x,y).
-// scale: 0=full, JPEG_SCALE_HALF=2, JPEG_SCALE_QUARTER=4, JPEG_SCALE_EIGHTH=8
-static void draw_jpeg_from_sd(const char *path, int x, int y, int scale = 0) {
+// scale:  0=full, JPEG_SCALE_HALF=2, JPEG_SCALE_QUARTER=4, JPEG_SCALE_EIGHTH=8
+// clip_w/h: clip decoded output to (x,y)+(clip_w × clip_h); 0 = no clip
+static void draw_jpeg_from_sd(const char *path, int x, int y, int scale = 0,
+                               int clip_w = 0, int clip_h = 0) {
+    _clip_x = x; _clip_y = y; _clip_w = clip_w; _clip_h = clip_h;
     File f = SD.open(path);
     if (!f) return;
     size_t sz = f.size();
@@ -85,7 +104,8 @@ static int    gallery_total = 0;
 static int    gallery_page  = 0;
 
 // Photo-view state
-static String photo_view_name = "";
+static String photo_view_name  = "";
+static int    photo_view_index = 0;   // index of current photo in gallery_files
 
 // Dirty flags to avoid unnecessary redraws
 static bool ctrl_dirty  = true;
@@ -298,8 +318,9 @@ static void draw_gallery() {
             snprintf(path, sizeof(path), "%s/%s",
                      PHOTO_DIR, gallery_files[idx].c_str());
             if (SD.exists(path)) {
-                draw_jpeg_from_sd(path, x, y, JPEG_SCALE_EIGHTH);
-                // Thin border
+                // JPEG_SCALE_EIGHTH on SVGA (800×600) → 100×75 px;
+                // clip to THUMB_W×THUMB_H so it doesn't bleed into adjacent slots.
+                draw_jpeg_from_sd(path, x, y, JPEG_SCALE_EIGHTH, THUMB_W, THUMB_H);
                 gfx->drawRect(x, y, THUMB_W, THUMB_H, COLOR_GRAY);
             } else {
                 // Placeholder for missing file
@@ -355,6 +376,7 @@ static void handle_gallery_touch(int16_t tx, int16_t ty) {
         int y   = GAL_HEADER_H + row * (THUMB_H + GAL_PAD) + GAL_PAD;
 
         if (tx >= x && tx < x + THUMB_W && ty >= y && ty < y + THUMB_H) {
+            photo_view_index = idx;
             photo_view_name  = gallery_files[idx];
             photo_dirty      = true;
             state            = STATE_PHOTO_VIEW;
@@ -384,49 +406,83 @@ static void handle_gallery_touch(int16_t tx, int16_t ty) {
 static void draw_photo_view() {
     gfx->fillScreen(COLOR_BG);
 
-    // Draw full photo
+    // Draw full photo (no clip – scale=0 means full size, fit to screen)
     char path[64];
     snprintf(path, sizeof(path), "%s/%s", PHOTO_DIR, photo_view_name.c_str());
     if (SD.exists(path)) {
         draw_jpeg_from_sd(path, 0, PV_PHOTO_Y, 0);
     }
 
-    // Header overlay (semi-transparent via solid dark strip)
+    // Header bar
     gfx->fillRect(0, 0, 240, PV_HEADER_H, COLOR_BG);
     draw_button(4, 7, 60, 30, COLOR_DARK_GRAY, "<Back");
 
     gfx->setTextColor(COLOR_WHITE);
     gfx->setTextSize(1);
-    // Truncate filename to fit
     String display_name = photo_view_name;
-    if (display_name.length() > 16) display_name = display_name.substring(0, 16) + "..";
-    gfx->setCursor(72, 18);
+    if (display_name.length() > 12) display_name = display_name.substring(0, 12) + "..";
+    gfx->setCursor(70, 18);
     gfx->print(display_name);
 
     draw_button(168, 7, 68, 30, COLOR_RED, "Delete");
+
+    // Left / right navigation arrows in the photo area
+    gfx->setTextSize(3);
+    if (photo_view_index > 0) {
+        gfx->fillRect(0, 170, 32, 40, 0x2104);   // dark semi-overlay
+        gfx->setTextColor(COLOR_WHITE);
+        gfx->setCursor(4, 178);
+        gfx->print("<");
+    }
+    if (photo_view_index < gallery_total - 1) {
+        gfx->fillRect(208, 170, 32, 40, 0x2104);
+        gfx->setTextColor(COLOR_WHITE);
+        gfx->setCursor(212, 178);
+        gfx->print(">");
+    }
 
     photo_dirty = false;
 }
 
 static void handle_photo_view_touch(int16_t tx, int16_t ty) {
-    if (ty > PV_HEADER_H) return;  // only header area is interactive
-
-    // Back
-    if (tx >= 4 && tx <= 64) {
-        gallery_dirty = true;
-        state = STATE_GALLERY;
+    if (ty <= PV_HEADER_H) {
+        // Header: Back
+        if (tx >= 4 && tx <= 64) {
+            gallery_dirty = true;
+            state = STATE_GALLERY;
+            return;
+        }
+        // Header: Delete
+        if (tx >= 168 && tx <= 236) {
+            sdcard_delete_photo(photo_view_name.c_str());
+            gallery_total = sdcard_list_photos(gallery_files, MAX_GALLERY_FILES);
+            if (photo_view_index >= gallery_total) photo_view_index = gallery_total - 1;
+            if (gallery_page * THUMBS_PER_PAGE >= gallery_total && gallery_page > 0)
+                gallery_page--;
+            if (gallery_total == 0) {
+                gallery_dirty = true;
+                state = STATE_GALLERY;
+            } else {
+                photo_view_name = gallery_files[photo_view_index];
+                photo_dirty = true;
+            }
+            return;
+        }
         return;
     }
 
-    // Delete
-    if (tx >= 168 && tx <= 236) {
-        sdcard_delete_photo(photo_view_name.c_str());
-        // Refresh gallery list
-        gallery_total = sdcard_list_photos(gallery_files, MAX_GALLERY_FILES);
-        if (gallery_page * THUMBS_PER_PAGE >= gallery_total && gallery_page > 0)
-            gallery_page--;
-        gallery_dirty = true;
-        state = STATE_GALLERY;
+    // Photo area: left edge → previous photo
+    if (tx < 60 && photo_view_index > 0) {
+        photo_view_index--;
+        photo_view_name = gallery_files[photo_view_index];
+        photo_dirty = true;
+        return;
+    }
+    // Photo area: right edge → next photo
+    if (tx > 180 && photo_view_index < gallery_total - 1) {
+        photo_view_index++;
+        photo_view_name = gallery_files[photo_view_index];
+        photo_dirty = true;
         return;
     }
 }
