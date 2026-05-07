@@ -31,8 +31,12 @@ bool cam_init() {
 
     cfg.xclk_freq_hz  = 20000000;
     cfg.pixel_format  = PIXFORMAT_JPEG;
-    cfg.frame_size    = FRAMESIZE_HQVGA;  // 240×176 for preview
-    cfg.jpeg_quality  = 12;
+    // Allocate frame buffers for the LARGEST resolution we will ever use (SVGA
+    // 800×600).  If we init with HQVGA, the PSRAM buffers are too small for an
+    // SVGA JPEG and cam_capture() returns NULL.  HQVGA frames fit fine in an
+    // SVGA-sized buffer, so preview is unaffected.
+    cfg.frame_size    = FRAMESIZE_SVGA;
+    cfg.jpeg_quality  = 10;
     cfg.fb_count      = 2;               // double-buffer for smooth preview
     cfg.grab_mode     = CAMERA_GRAB_LATEST; // always return the newest frame
     cfg.fb_location   = CAMERA_FB_IN_PSRAM; // use 8 MB PSRAM
@@ -43,7 +47,7 @@ bool cam_init() {
         return false;
     }
 
-    // Sensor tweaks
+    // Sensor tweaks + switch to HQVGA for live preview
     sensor_t *s = esp_camera_sensor_get();
     if (s) {
         s->set_brightness(s,  0);
@@ -62,9 +66,12 @@ bool cam_init() {
         s->set_hmirror(s,     0);
         s->set_vflip(s,       0);
         s->set_colorbar(s,    0);
+        // Switch down to HQVGA for the live preview loop
+        s->set_framesize(s, FRAMESIZE_HQVGA);
+        s->set_quality(s, 12);
     }
 
-    Serial.println("[cam] OV2640 OK  (HQVGA JPEG preview mode)");
+    Serial.println("[cam] OV2640 OK  (buffers=SVGA, preview=HQVGA)");
     return true;
 }
 
