@@ -209,23 +209,13 @@ static void update_viewfinder() {
 //  CAPTURE
 // ============================================================
 static void do_capture() {
-    // Flash effect
+    // Flash effect + progress banner so screen isn't just blank white
     gfx->fillScreen(COLOR_WHITE);
     delay(40);
-
-    // Save the current HQVGA frame as the file (copy to PSRAM first
-    // so we can switch frame size without losing the buffer)
-    camera_fb_t *prev = cam_get_preview();
-    uint8_t     *thumb_data = nullptr;
-    size_t       thumb_len  = 0;
-    if (prev) {
-        thumb_data = (uint8_t *)ps_malloc(prev->len);
-        if (thumb_data) {
-            memcpy(thumb_data, prev->buf, prev->len);
-            thumb_len = prev->len;
-        }
-        cam_return_fb(prev);
-    }
+    gfx->setTextColor(COLOR_DARK_GRAY);
+    gfx->setTextSize(2);
+    gfx->setCursor(40, 150);
+    gfx->print("Capturing...");
 
     // Shutter sound
     buzzer_shutter();
@@ -234,23 +224,40 @@ static void do_capture() {
     camera_fb_t *full = cam_capture();
     char filename[32] = "";
 
-    if (full) {
-        if (sdcard_save_photo(full->buf, full->len, filename, sizeof(filename))) {
-            // Show a brief "Saved!" banner
-            gfx->fillRect(0, 0, 240, 28, COLOR_GREEN);
-            gfx->setTextColor(COLOR_WHITE);
-            gfx->setTextSize(2);
-            gfx->setCursor(8, 6);
-            gfx->printf("Saved: %s", filename);
-            ctrl_dirty = true;
-            delay(900);
-        }
-        cam_return_fb(full);
+    if (!full) {
+        gfx->fillRect(0, 0, 240, 28, COLOR_RED);
+        gfx->setTextColor(COLOR_WHITE);
+        gfx->setTextSize(2);
+        gfx->setCursor(8, 6);
+        gfx->print("Camera Error!");
+        delay(1500);
+        state = STATE_VIEWFINDER;
+        ctrl_dirty = true;
+        return;
     }
 
-    if (thumb_data) free(thumb_data);
+    // Show size so we know the frame arrived
+    Serial.printf("[cap] JPEG frame: %u bytes\n", full->len);
 
+    if (sdcard_save_photo(full->buf, full->len, filename, sizeof(filename))) {
+        gfx->fillRect(0, 0, 240, 28, COLOR_GREEN);
+        gfx->setTextColor(COLOR_WHITE);
+        gfx->setTextSize(2);
+        gfx->setCursor(8, 6);
+        gfx->printf("Saved: %s", filename);
+        delay(900);
+    } else {
+        gfx->fillRect(0, 0, 240, 28, COLOR_RED);
+        gfx->setTextColor(COLOR_WHITE);
+        gfx->setTextSize(2);
+        gfx->setCursor(8, 6);
+        gfx->print("SD Save Failed!");
+        delay(1500);
+    }
+
+    cam_return_fb(full);
     state = STATE_VIEWFINDER;
+    ctrl_dirty = true;
 }
 
 // ============================================================

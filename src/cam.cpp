@@ -92,10 +92,9 @@ camera_fb_t *cam_capture() {
     }
     in_capture_mode = true;
 
-    // Drop two frames so AE/AWB can settle at the new resolution
+    // Drop one frame so the sensor flushes the old HQVGA frame from its DMA buffer.
+    // (Two drops was slower with no meaningful image quality improvement.)
     camera_fb_t *dummy = esp_camera_fb_get();
-    if (dummy) esp_camera_fb_return(dummy);
-    dummy = esp_camera_fb_get();
     if (dummy) esp_camera_fb_return(dummy);
 
     return esp_camera_fb_get();

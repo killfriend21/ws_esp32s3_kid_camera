@@ -85,9 +85,15 @@ bool sdcard_save_photo(const uint8_t *data, size_t len,
     char path[64];
     snprintf(path, sizeof(path), "%s/%s", PHOTO_DIR, out_filename);
 
+    // Ensure directory exists (might not on a brand-new card)
+    if (!SD.exists(PHOTO_DIR)) {
+        SD.mkdir(PHOTO_DIR);
+    }
+
     File f = SD.open(path, FILE_WRITE);
     if (!f) {
-        Serial.printf("[sd] Cannot open %s for writing\n", path);
+        Serial.printf("[sd] Cannot open %s for writing  (dir exists: %d)\n",
+                      path, SD.exists(PHOTO_DIR));
         photo_counter--;
         return false;
     }
