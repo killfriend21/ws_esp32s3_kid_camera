@@ -3,12 +3,16 @@
 #include <SD.h>
 #include <SPI.h>
 
+// GFX 1.4.0 on ESP32-S3 drives the SPI bus via internal HAL (HSPI/SPI3)
+// without touching the global SPI (FSPI/SPI2) object.  We must explicitly
+// create an SPIClass on the same host and attach the shared GPIO pins.
+static SPIClass _sd_spi(HSPI);
+
 static int photo_counter = 0;  // highest IMG number seen so far
 
 bool sdcard_init() {
-    // The SPI bus was already started by display_init() (Arduino_GFX calls
-    // SPI.begin with LCD pins).  SD.begin() reuses the same SPI instance.
-    if (!SD.begin(SD_CS, SPI, 40000000UL)) {
+    _sd_spi.begin(LCD_SCK, LCD_MISO, LCD_MOSI, SD_CS);
+    if (!SD.begin(SD_CS, _sd_spi, 40000000UL)) {
         Serial.println("[sd] SD card mount failed");
         return false;
     }
